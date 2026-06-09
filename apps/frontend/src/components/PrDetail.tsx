@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { EventType, PrDetail as PrDetailT, User } from '@gh-team-monitor/shared';
 import { usePr } from '../hooks/usePr.js';
@@ -7,9 +7,11 @@ import { useFilters } from '../store/filters.js';
 import { dateTime, indexUsers, PR_STATE_META, relativeTime } from '../lib/ui.js';
 import { Avatar } from './CommentCard.js';
 import { UserName } from './UserName.js';
+import { ShowOnTimeline } from './ShowOnTimeline.js';
 import { ThreadList } from './ThreadList/index.js';
 import { ChecksTab } from './ChecksTab.js';
 import { Markdown } from './Markdown.js';
+import { isNewComment, NewTag } from './ThreadView/index.js';
 
 function newSummary(n: PrDetailT['newSinceLastViewed']): string | null {
   if (!n) return null;
@@ -20,7 +22,7 @@ function newSummary(n: PrDetailT['newSinceLastViewed']): string | null {
   return parts.length ? parts.join(' · ') : null;
 }
 
-type Tab = 'overview' | 'activity';
+type Tab = 'overview' | 'threads' | 'activity';
 
 interface ActivityRow {
   key: string;
@@ -97,7 +99,8 @@ function buildActivity(pr: PrDetailT): ActivityRow[] {
       event: { type: 'pr_closed', refId: null },
     });
   }
-  return rows.sort((a, b) => a.time.localeCompare(b.time));
+  // Newest first.
+  return rows.sort((a, b) => b.time.localeCompare(a.time));
 }
 
 function ActivityList({
@@ -105,15 +108,44 @@ function ActivityList({
   usersById,
   since,
   onClearSince,
+  focusEvent,
+  onConsumed,
 }: {
   pr: PrDetailT;
   usersById: Map<number, User>;
   since: string | null;
   onClearSince: () => void;
+  // Deep link from the timeline (e.g. a commit popover): scroll to + flash the
+  // matching entry, then consume the request.
+  focusEvent: { type: EventType; refId: number | null } | null;
+  onConsumed: () => void;
 }): JSX.Element {
   const all = useMemo(() => buildActivity(pr), [pr]);
   const rows = since ? all.filter((r) => r.time > since) : all;
   const showEventOnTimeline = useFilters((s) => s.showEventOnTimeline);
+  const rowRefs = useRef(new Map<string, HTMLLIElement>());
+  const [flashKey, setFlashKey] = useState<string | null>(null);
+
+  // Scroll to + flash the targeted entry once it's rendered.
+  useEffect(() => {
+    if (!focusEvent) return;
+    const row = all.find(
+      (r) => r.event.type === focusEvent.type && r.event.refId === focusEvent.refId,
+    );
+    onConsumed();
+    if (!row) return;
+    rowRefs.current.get(row.key)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setFlashKey(row.key);
+  }, [focusEvent, all, onConsumed]);
+
+  // Fade the flash after a beat — kept on its own key so consuming focusEvent
+  // (which re-runs the effect above) can't cancel the timer early.
+  useEffect(() => {
+    if (flashKey == null) return;
+    const t = setTimeout(() => setFlashKey(null), 1800);
+    return () => clearTimeout(t);
+  }, [flashKey]);
+
   return (
     <ul className="divide-y divide-gray-100 dark:divide-gray-800">
       {since && (
@@ -131,11 +163,25 @@ function ActivityList({
       {rows.map((r) => {
         const user = r.actorId != null ? usersById.get(r.actorId) : undefined;
         return (
-          <li key={r.key} className="flex items-start gap-2 px-3 py-2 text-sm">
+          <li
+            key={r.key}
+            ref={(el) => {
+              if (el) rowRefs.current.set(r.key, el);
+              else rowRefs.current.delete(r.key);
+            }}
+            className={`flex items-start gap-2 px-3 py-2 text-sm ${
+              r.key === flashKey ? 'activity-flash' : ''
+            }`}
+          >
             <Avatar user={user} size={20} />
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                <UserName user={user} fallbackId={r.actorId} className="font-medium" />
+                <UserName
+                  user={user}
+                  fallbackId={r.actorId}
+                  repoId={pr.repoId}
+                  className="font-medium"
+                />
                 <span className="text-gray-500">{r.label}</span>
                 <span className="text-xs text-gray-400" title={dateTime(r.time)}>
                   · {dateTime(r.time)}
@@ -174,6 +220,162 @@ function ActivityList({
   );
 }
 
+// Issue-level PR comments (distinct from inline review threads). Each maps to a
+// `pr_comment` timeline event whose refId is the comment row id, so "Show on
+// timeline" reuses the same (type, refId) + recenter mechanism as the Activity
+// tab.
+function PrCommentsList({
+  pr,
+  usersById,
+  viewedSince,
+  focusCommentId,
+  onFocusConsumed,
+}: {
+  pr: PrDetailT;
+  usersById: Map<number, User>;
+  viewedSince: string | null;
+  // Deep link from the timeline (pr_comment popover → "Open in detail pane"):
+  // scroll to + flash this comment card, then consume the request.
+  focusCommentId: number | null;
+  onFocusConsumed: () => void;
+}): JSX.Element {
+  const cardRefs = useRef(new Map<number, HTMLDivElement>());
+  const [flashId, setFlashId] = useState<number | null>(null);
+
+  // Scroll to + flash the deep-linked comment once it's rendered, then consume the
+  // request (the flash lives on its own state so consuming can't cancel it early).
+  useEffect(() => {
+    if (focusCommentId == null) return;
+    onFocusConsumed();
+    const el = cardRefs.current.get(focusCommentId);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setFlashId(focusCommentId);
+  }, [focusCommentId, onFocusConsumed]);
+
+  useEffect(() => {
+    if (flashId == null) return;
+    const t = setTimeout(() => setFlashId(null), 1800);
+    return () => clearTimeout(t);
+  }, [flashId]);
+
+  if (pr.comments.length === 0) {
+    return (
+      <div className="px-3 py-6 text-center text-sm text-gray-500">
+        No PR comments on this PR.
+      </div>
+    );
+  }
+
+  // Newest first (the API returns them oldest-first by createdAt).
+  const comments = [...pr.comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div className="space-y-2 px-3 pb-3">
+      {comments.map((c) => {
+        const user = c.authorId != null ? usersById.get(c.authorId) : undefined;
+        const isNew = isNewComment(c.createdAt, viewedSince);
+        return (
+          <div
+            key={c.id}
+            ref={(el) => {
+              if (el) cardRefs.current.set(c.id, el);
+              else cardRefs.current.delete(c.id);
+            }}
+            className={`rounded-md border border-gray-200 px-2.5 py-2 dark:border-gray-800 ${
+              isNew ? 'comment-new' : ''
+            } ${c.id === flashId ? 'activity-flash' : ''}`}
+          >
+            <div className="flex items-center gap-2 text-xs">
+              <ShowOnTimeline
+                prId={pr.id}
+                at={c.createdAt}
+                event={{ type: 'pr_comment', refId: c.id }}
+                title="Show this comment on the timeline"
+              />
+              <span className="text-gray-300 dark:text-gray-600">·</span>
+              <Avatar user={user} size={18} />
+              <UserName
+                user={user}
+                fallbackId={c.authorId}
+                repoId={pr.repoId}
+                className="font-semibold"
+              />
+              <span className="text-gray-400" title={dateTime(c.createdAt)}>
+                {relativeTime(c.createdAt)}
+              </span>
+              {isNew && <NewTag />}
+            </div>
+            <div className="mt-1 text-sm">
+              <Markdown>{c.body}</Markdown>
+            </div>
+            {c.url && (
+              <div className="mt-2 pl-2 text-[11px]">
+                <a
+                  href={c.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="text-blue-500 hover:underline"
+                >
+                  ↗ View comment on GitHub
+                </a>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The PR description (markdown), shown above the PR comments. Collapsed to the
+// first three lines by default with a Show more/less toggle — surfaced only when
+// the body actually overflows — so a long description never buries the comments
+// and threads below it.
+function PrSummary({ body }: { body: string }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Measure overflow while clamped (skip when expanded — the clamp is off then, so
+  // scrollHeight === clientHeight and the test would always read false).
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const el = ref.current;
+    if (el) setOverflowing(el.scrollHeight - el.clientHeight > 1);
+  }, [body, expanded]);
+
+  return (
+    <div className="border-t border-gray-200 dark:border-gray-800">
+      <div className="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Summary
+      </div>
+      <div className="px-4 pb-3 text-sm">
+        <div
+          ref={ref}
+          className="overflow-hidden"
+          style={
+            expanded
+              ? undefined
+              : { display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical' }
+          }
+        >
+          <Markdown>{body}</Markdown>
+        </div>
+        {(overflowing || expanded) && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-1 text-xs font-medium text-blue-500 hover:underline"
+          >
+            {expanded ? 'Show less' : 'Show more'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PrDetail({
   prId,
   selectedThreadId,
@@ -185,12 +387,44 @@ export function PrDetail({
   const [tab, setTab] = useState<Tab>('overview');
   const [activitySince, setActivitySince] = useState<string | null>(null);
   const qc = useQueryClient();
+  const openPrFocused = useFilters((s) => s.openPrFocused);
+  const focusPrOnTimeline = useFilters((s) => s.focusPrOnTimeline);
+  const activityFocus = useFilters((s) => s.activityFocus);
+  const consumeActivityFocus = useFilters((s) => s.consumeActivityFocus);
+  const activityFocusForPr = useMemo(
+    () =>
+      activityFocus && pr && activityFocus.prId === pr.id
+        ? { type: activityFocus.type, refId: activityFocus.refId }
+        : null,
+    [activityFocus, pr],
+  );
+  const commentFocus = useFilters((s) => s.commentFocus);
+  const consumeCommentFocus = useFilters((s) => s.consumeCommentFocus);
+  const commentFocusForPr =
+    commentFocus && pr && commentFocus.prId === pr.id ? commentFocus.commentId : null;
 
-  // Selecting a thread (e.g. via a timeline marker) forces the Overview tab,
+  // Selecting a thread (e.g. via a timeline marker) forces the Threads tab,
   // where the thread list lives and auto-scrolls to the selected thread.
   useEffect(() => {
-    if (selectedThreadId != null) setTab('overview');
+    if (selectedThreadId != null) setTab('threads');
   }, [selectedThreadId]);
+
+  // A timeline deep link to an Activity entry (e.g. the commit popover) forces the
+  // Activity tab and clears the "since" filter so the target is visible; the list
+  // then scrolls to + flashes it.
+  useEffect(() => {
+    if (activityFocusForPr) {
+      setTab('activity');
+      setActivitySince(null);
+    }
+  }, [activityFocusForPr]);
+
+  // A timeline deep link to a PR comment (the pr_comment popover's "Open in detail
+  // pane") forces the Overview tab, where PrCommentsList then scrolls to + flashes
+  // it. PrCommentsList consumes the signal (not here) once it has scrolled.
+  useEffect(() => {
+    if (commentFocusForPr != null) setTab('overview');
+  }, [commentFocusForPr]);
 
   // Capture the last-viewed instant before marking (so new comments highlight
   // on this visit), then mark the PR viewed and refresh the list views' badges.
@@ -281,8 +515,25 @@ export function PrDetail({
           </a>
         </div>
         <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+          <button
+            type="button"
+            onClick={() => openPrFocused(pr.id)}
+            className="shrink-0 font-medium text-blue-500 hover:underline"
+            title="Centre and highlight this PR on the timeline"
+          >
+            Show
+          </button>
+          <button
+            type="button"
+            onClick={() => focusPrOnTimeline(pr.id)}
+            className="shrink-0 font-medium text-blue-500 hover:underline"
+            title="Isolate this PR and its contributors on the timeline (Exit focus / Esc to leave)"
+          >
+            Focus
+          </button>
+          <span className="text-gray-300 dark:text-gray-600">·</span>
           <Avatar user={author} size={16} />
-          <UserName user={author} fallbackId={pr.authorId} />
+          <UserName user={author} fallbackId={pr.authorId} repoId={pr.repoId} />
           <span>·</span>
           <span>{pr.repoFullName}</span>
           <span>·</span>
@@ -291,7 +542,7 @@ export function PrDetail({
       </div>
 
       <div className="flex gap-1 border-b border-gray-200 px-3 dark:border-gray-800">
-        {(['overview', 'activity'] as Tab[]).map((t) => {
+        {(['overview', 'threads', 'activity'] as Tab[]).map((t) => {
           const failing = pr.checkRuns.filter(
             (c) => c.state === 'failure' || c.state === 'error',
           ).length;
@@ -312,7 +563,7 @@ export function PrDetail({
                   ●
                 </span>
               )}
-              {t === 'overview' && pr.threads.length > 0 && (
+              {t === 'threads' && pr.threads.length > 0 && (
                 <span className="ml-1 opacity-60" title={`${pr.threads.length} threads`}>
                   {pr.threads.length}
                 </span>
@@ -326,28 +577,40 @@ export function PrDetail({
         {tab === 'overview' ? (
           <div>
             <ChecksTab pr={pr} usersById={usersById} />
+            {pr.body && pr.body.trim() && <PrSummary body={pr.body} />}
             <div className="border-t border-gray-200 dark:border-gray-800">
               <div className="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-                Threads
-                {pr.threads.length > 0 && (
-                  <span className="ml-1 font-normal opacity-70">· {pr.threads.length}</span>
+                PR comments
+                {pr.comments.length > 0 && (
+                  <span className="ml-1 font-normal opacity-70">· {pr.comments.length}</span>
                 )}
               </div>
-              <ThreadList
-                threads={pr.threads}
+              <PrCommentsList
+                pr={pr}
                 usersById={usersById}
-                prUrl={pr.githubUrl}
-                selectedThreadId={selectedThreadId}
                 viewedSince={pr.lastViewedAt}
+                focusCommentId={commentFocusForPr}
+                onFocusConsumed={consumeCommentFocus}
               />
             </div>
           </div>
+        ) : tab === 'threads' ? (
+          <ThreadList
+            threads={pr.threads}
+            usersById={usersById}
+            prUrl={pr.githubUrl}
+            repoId={pr.repoId}
+            selectedThreadId={selectedThreadId}
+            viewedSince={pr.lastViewedAt}
+          />
         ) : (
           <ActivityList
             pr={pr}
             usersById={usersById}
             since={activitySince}
             onClearSince={() => setActivitySince(null)}
+            focusEvent={activityFocusForPr}
+            onConsumed={consumeActivityFocus}
           />
         )}
       </div>

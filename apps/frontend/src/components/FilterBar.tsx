@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DERIVED_STATES,
@@ -6,6 +6,8 @@ import {
   type DerivedState,
   type EventCategory,
   type PrStatus,
+  type Repo,
+  type User,
 } from '@gh-team-monitor/shared';
 import { api, ApiError } from '../api/client.js';
 import { useMergers, useRepos, useSearchTimeline, useUsers } from '../hooks/useTimeline.js';
@@ -16,7 +18,9 @@ import {
   type RangePreset,
 } from '../store/filters.js';
 import { DERIVED_STATE_META } from '../lib/ui.js';
-import { UserSelectPanel } from './UserSelectPanel.js';
+import { RepoSearch } from './RepoSearch.js';
+import { RepoSelectPanel } from './RepoSelectPanel.js';
+import { UserSelectPanel, type MemberSection } from './UserSelectPanel.js';
 
 const PRESETS: Exclude<RangePreset, 'custom'>[] = ['7d', '14d', '30d', '90d'];
 const CATEGORY_LABELS: Record<EventCategory, string> = {
@@ -88,59 +92,6 @@ function Chip({
   );
 }
 
-function AddRepo(): JSX.Element {
-  const qc = useQueryClient();
-  const [value, setValue] = useState('');
-  const mutation = useMutation({
-    mutationFn: (slug: string) => {
-      const [owner, name] = slug.split('/');
-      if (!owner || !name) throw new Error('Use owner/name');
-      return api.addRepo({ owner, name });
-    },
-    onSuccess: () => {
-      setValue('');
-      void qc.invalidateQueries({ queryKey: ['repos'] });
-      void qc.invalidateQueries({ queryKey: ['timeline'] });
-      void qc.invalidateQueries({ queryKey: ['open-prs'] });
-      void qc.invalidateQueries({ queryKey: ['users'] });
-      void qc.invalidateQueries({ queryKey: ['my-turn'] });
-      void qc.invalidateQueries({ queryKey: ['me'] });
-    },
-  });
-
-  return (
-    <form
-      className="flex items-center gap-1"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (value.trim()) mutation.mutate(value.trim());
-      }}
-    >
-      <input
-        id="add-repo-input"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        placeholder="owner/repo"
-        className="w-32 rounded border border-gray-300 bg-transparent px-2 py-0.5 text-xs focus:border-blue-500 focus:outline-none dark:border-gray-700"
-      />
-      <button
-        type="submit"
-        disabled={mutation.isPending}
-        className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white disabled:opacity-50"
-      >
-        {mutation.isPending ? 'Adding…' : 'Add'}
-      </button>
-      {mutation.error && (
-        <span className="max-w-[14rem] truncate text-xs text-red-500" title={String(mutation.error)}>
-          {mutation.error instanceof ApiError
-            ? mutation.error.message
-            : String(mutation.error)}
-        </span>
-      )}
-    </form>
-  );
-}
-
 function Section({
   label,
   children,
@@ -184,64 +135,138 @@ export function FilterBar(): JSX.Element {
     },
   });
 
-  // Member picker options. With NO repo filter we offer the full non-bot roster
-  // (so you can pick anyone), surfacing in-window actors first then alphabetical.
-  // With a repo filter active we LIMIT the list to members active in the selected
-  // repo(s) — derived from the member-agnostic search payloads above, which
-  // already contain only those repos, so the list mirrors who's actually on the
-  // timeline for them. Currently-selected members are always kept so they stay
-  // visible/un-checkable even if they have no activity in the selected repos.
-  const repoScoped = f.repoIds != null && f.repoIds.length > 0;
-  const selectedIds = new Set(f.userIds ?? []);
-  const activeMemberIds = new Set(
-    [
-      ...(searchTimeline?.events ?? []).map((e) => e.actorId),
-      ...(searchTimeline?.prs ?? []).map((p) => p.authorId),
-      ...(searchOpenPrs?.prs ?? []).map((p) => p.authorId),
-    ].filter((x): x is number => x != null),
-  );
-  // Members with merge rights in the relevant repo(s) — the selected repos when a
-  // repo filter is active, else any repo — so the picker shows the same shield
-  // as the timeline rows.
-  const maintainerIds = new Set<number>();
-  for (const m of mergers ?? []) {
-    if (repoScoped && !(f.repoIds ?? []).includes(m.repoId)) continue;
-    for (const uid of m.userIds) maintainerIds.add(uid);
-  }
-  const memberUsers = (users ?? [])
-    .filter((u) => !u.isBot)
-    .filter((u) => !repoScoped || activeMemberIds.has(u.id) || selectedIds.has(u.id))
-    .sort((a, b) => {
-      const aActive = activeMemberIds.has(a.id) ? 0 : 1;
-      const bActive = activeMemberIds.has(b.id) ? 0 : 1;
-      if (aActive !== bActive) return aActive - bActive;
-      return (a.displayName || a.githubLogin).localeCompare(b.displayName || b.githubLogin);
-    });
+  // Show/hide a single repo on the timeline. `repoIds` is the explicit visible
+  // subset (null = all). Toggling canonicalises back to null when every repo is
+  // visible again, so the URL stays clean and the trigger reads "all".
+  const toggleRepoVisibility = (id: number): void => {
+    const allIds = (repos ?? []).map((r) => r.id);
+    const visible = new Set(useFilters.getState().repoIds ?? allIds);
+    if (visible.has(id)) visible.delete(id);
+    else visible.add(id);
+    f.setRepoIds(
+      visible.size === 0 || visible.size === allIds.length
+        ? null
+        : allIds.filter((x) => visible.has(x)),
+    );
+  };
+
+  const confirmRemoveRepo = (r: Repo): void => {
+    if (
+      window.confirm(
+        `Stop watching ${r.fullName}? This deletes all of its locally-synced data.`,
+      )
+    ) {
+      removeRepo.mutate(r.id);
+    }
+  };
+
+  // Member picker options, organised into sections: one section per in-scope repo
+  // listing that repo's members. A member active in several repos is intentionally
+  // REPEATED across those sections; selection is keyed by user id, so checking them
+  // in one section checks them everywhere. A trailing "Other" group holds the full
+  // non-bot roster remainder (when no repo filter is set) plus any selected-but-
+  // inactive members, so anyone stays pickable and selections stay visible.
+  // maintainerIds (merge rights in the relevant repo(s)) drives both the per-row
+  // shields and the panel's "Maintainers" quick-select — it is no longer a section.
+  const { sections: memberSections, maintainerIds } = useMemo(() => {
+    const repoScoped = f.repoIds != null && f.repoIds.length > 0;
+    const inScopeRepoIds = repoScoped ? new Set(f.repoIds) : null;
+
+    const byId = new Map((users ?? []).map((u) => [u.id, u] as const));
+    const usable = (id: number | null): User | null => {
+      if (id == null) return null;
+      const u = byId.get(id);
+      return u && !u.isBot ? u : null;
+    };
+
+    // Per-repo membership, derived from the member-agnostic window activity.
+    // Limited to in-scope repos (the selected repos, or all when no repo filter).
+    const repoMembers = new Map<number, Set<number>>();
+    const addMember = (repoId: number, userId: number | null): void => {
+      if (userId == null) return;
+      if (inScopeRepoIds && !inScopeRepoIds.has(repoId)) return;
+      let set = repoMembers.get(repoId);
+      if (!set) repoMembers.set(repoId, (set = new Set()));
+      set.add(userId);
+    };
+    for (const e of searchTimeline?.events ?? []) addMember(e.repoId, e.actorId);
+    for (const p of searchTimeline?.prs ?? []) addMember(p.repoId, p.authorId);
+    for (const p of searchOpenPrs?.prs ?? []) addMember(p.repoId, p.authorId);
+
+    // Maintainers (merge rights) in the relevant repo(s). They also count as
+    // members of their repo, so a maintainer surfaces under their repo section
+    // even without any activity in the window. Bots/unknowns are skipped so the
+    // "Maintainers" quick-select only stages real, selectable members.
+    const maintainers = new Set<number>();
+    for (const m of mergers ?? []) {
+      if (inScopeRepoIds && !inScopeRepoIds.has(m.repoId)) continue;
+      for (const uid of m.userIds) {
+        if (!usable(uid)) continue;
+        maintainers.add(uid);
+        addMember(m.repoId, uid);
+      }
+    }
+
+    const byName = (a: User, b: User): number =>
+      (a.displayName || a.githubLogin).localeCompare(b.displayName || b.githubLogin);
+    const maintainerFirst = (a: User, b: User): number => {
+      const rank = (maintainers.has(a.id) ? 0 : 1) - (maintainers.has(b.id) ? 0 : 1);
+      return rank !== 0 ? rank : byName(a, b);
+    };
+
+    const sections: MemberSection[] = [];
+    const placed = new Set<number>();
+
+    // One section per in-scope repo (kept in the repo-chip order). Maintainers are
+    // sorted first within each repo (and badged), but get no section of their own —
+    // the "Maintainers" quick-select in the panel covers them across all repos.
+    for (const r of repos ?? []) {
+      if (inScopeRepoIds && !inScopeRepoIds.has(r.id)) continue;
+      const ids = repoMembers.get(r.id);
+      if (!ids || ids.size === 0) continue;
+      const members = [...ids]
+        .map(usable)
+        .filter((u): u is User => u != null)
+        .sort(maintainerFirst);
+      if (!members.length) continue;
+      sections.push({ key: `repo:${r.id}`, label: r.name, members });
+      for (const u of members) placed.add(u.id);
+    }
+
+    // Selectable universe: the full non-bot roster when there's no repo filter,
+    // else the placed (active/maintainer) members plus any selected ones. Whatever
+    // isn't already in a section above falls into "Other".
+    const selectedIds = f.userIds ?? [];
+    const universe = repoScoped
+      ? new Set<number>([...placed, ...selectedIds])
+      : new Set<number>((users ?? []).filter((u) => !u.isBot).map((u) => u.id));
+    const other = [...universe]
+      .map(usable)
+      .filter((u): u is User => u != null)
+      .filter((u) => !placed.has(u.id))
+      .sort(byName);
+    if (other.length) {
+      sections.push({
+        key: 'other',
+        label: repoScoped ? 'Other' : 'No recent activity',
+        members: other,
+      });
+    }
+
+    return { sections, maintainerIds: maintainers };
+  }, [users, searchTimeline, searchOpenPrs, mergers, repos, f.repoIds, f.userIds]);
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-200 bg-gray-50 px-4 py-2 dark:border-gray-800 dark:bg-gray-900">
       <Section label="Repos">
-        {(repos ?? []).map((r) => (
-          <Chip
-            key={r.id}
-            active={f.repoIds == null ? false : f.repoIds.includes(r.id)}
-            onClick={() => f.toggleRepo(r.id)}
-            title={r.fullName}
-            removeTitle={`Remove ${r.fullName}`}
-            removeDisabled={removeRepo.isPending}
-            onRemove={() => {
-              if (
-                window.confirm(
-                  `Stop watching ${r.fullName}? This deletes all of its locally-synced data.`,
-                )
-              ) {
-                removeRepo.mutate(r.id);
-              }
-            }}
-          >
-            {r.name}
-          </Chip>
-        ))}
+        <RepoSelectPanel
+          repos={repos ?? []}
+          repoIds={f.repoIds}
+          onToggle={toggleRepoVisibility}
+          onShowAll={() => f.setRepoIds(null)}
+          onRemove={confirmRemoveRepo}
+          removePending={removeRepo.isPending}
+        />
         {removeRepo.error && (
           <span
             className="max-w-[14rem] truncate text-xs text-red-500"
@@ -252,21 +277,12 @@ export function FilterBar(): JSX.Element {
               : 'Failed to remove repo'}
           </span>
         )}
-        {f.repoIds && f.repoIds.length > 0 && (
-          <button
-            type="button"
-            onClick={() => f.setRepoIds(null)}
-            className="text-[11px] text-gray-400 hover:text-gray-600"
-          >
-            all
-          </button>
-        )}
-        <AddRepo />
+        <RepoSearch />
       </Section>
 
       <Section label="Members">
         <UserSelectPanel
-          members={memberUsers}
+          sections={memberSections}
           userIds={f.userIds}
           maintainerIds={maintainerIds}
           onApply={(ids) => f.setUserIds(ids)}
@@ -287,6 +303,14 @@ export function FilterBar(): JSX.Element {
             {p}
           </Chip>
         ))}
+        <button
+          type="button"
+          onClick={() => f.centerTimelineNow()}
+          title="Recenter the timeline on the current time (keeps the zoom)"
+          className="whitespace-nowrap rounded-full border border-sky-300 px-2.5 py-0.5 text-xs text-sky-600 transition hover:border-sky-400 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-400 dark:hover:bg-sky-900/30"
+        >
+          Now
+        </button>
       </Section>
 
       <Section label="Status">
@@ -299,6 +323,16 @@ export function FilterBar(): JSX.Element {
             {STATUS_LABELS[s]}
           </Chip>
         ))}
+      </Section>
+
+      <Section label="Stale">
+        <Chip
+          active={f.excludeStale}
+          onClick={() => f.setExcludeStale(!f.excludeStale)}
+          title="Hide open PRs with no commits, comments or reviews within the selected time range"
+        >
+          Hide
+        </Chip>
       </Section>
 
       <Section label="Events">
@@ -326,6 +360,18 @@ export function FilterBar(): JSX.Element {
           </Chip>
         ))}
       </Section>
+
+      {/* Reset everything to fresh-load defaults (clears repos/members/range/
+          categories/statuses/threads/search + any selection). Pushed to the far
+          right so it reads as a distinct, global action. */}
+      <button
+        type="button"
+        onClick={() => f.resetAllFilters()}
+        title="Reset all filters to their defaults"
+        className="ml-auto whitespace-nowrap rounded border border-gray-300 px-2 py-0.5 text-xs text-gray-600 hover:border-gray-400 hover:text-gray-800 dark:border-gray-700 dark:text-gray-300 dark:hover:border-gray-500 dark:hover:text-gray-100"
+      >
+        Clear all
+      </button>
     </div>
   );
 }

@@ -98,6 +98,8 @@ export function renderUserLabel(
   uid: number,
   stats: UserStats | undefined,
   isMerger = false,
+  gid?: string,
+  isCollapsed = false,
 ): string {
   const name = userLabel(user, uid);
   const avatar = user?.avatarUrl
@@ -126,12 +128,27 @@ export function renderUserLabel(
     ? `<span class="tl-merger" title="Has merge rights — has merged a PR in this repo">${SHIELD_GLYPH}</span>`
     : '';
 
+  // Collapse/expand caret — shrinks the row to just this label (its bars + markers
+  // hidden via subgroupVisibility). A capturing click listener on the timeline
+  // container (Timeline/index.tsx) does the toggle by matching `data-collapse-gid`;
+  // we only emit the affordance here. Omitted when no gid is supplied.
+  const caretTitle = isCollapsed ? 'Expand row' : 'Collapse row';
+  const caret = gid
+    ? `<button type="button" class="tl-collapse-caret" data-collapse-gid="${escapeHtml(gid)}" title="${escapeHtml(caretTitle)}" aria-label="${escapeHtml(caretTitle)}">${isCollapsed ? '▸' : '▾'}</button>`
+    : '';
+
+  // Layout: a left gutter (caret + avatar) beside a stacked main column — the name
+  // (+ maintainer shield) on the first line, the interaction stats indented just
+  // below it. Stacking lets the name use the full label width instead of competing
+  // with the stats for it, so it rarely truncates and the column stays narrow.
   return (
     `<div class="tl-user">` +
+    caret +
     avatar +
-    nameHtml +
-    mergerBadge +
+    `<span class="tl-user-main">` +
+    `<span class="tl-user-name-line">${nameHtml}${mergerBadge}</span>` +
     statsHtml +
+    `</span>` +
     `</div>`
   );
 }

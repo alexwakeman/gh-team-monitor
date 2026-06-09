@@ -19,6 +19,67 @@ body {
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
 }
 
+/* ---- brand wordmark ("Pierre") ---- */
+/* Ornate cursive title in the top-left header. Great Vibes is a single 400 weight,
+   so we never bolden it (faux-bold mangles the script). line-height:1 keeps the
+   header compact despite the tall glyphs; the slight size bump gives the flourish
+   room to read. Swap the family here + the <link> in index.html for another script
+   (e.g. 'Pinyon Script', 'Parisienne', 'Tangerine'). */
+.brand-title {
+  font-family: 'Great Vibes', ui-serif, cursive;
+  font-weight: 400;
+  font-size: 1.75rem;
+  line-height: 1;
+  letter-spacing: 0.3px;
+  /* Nudge the baseline so the script sits optically centred next to the meta text. */
+  padding-bottom: 2px;
+}
+
+/* ---- focus-mode indicator ---- */
+/* A subtle header pill, shown only while a focus overlay is active (App reads the
+   store's focusActive), in the same sky palette as the selection/focus glow. The
+   little dot pulses to echo that glow without being loud. */
+.focus-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #0284c7; /* sky-600 */
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  white-space: nowrap;
+}
+.dark .focus-indicator {
+  color: #7dd3fc; /* sky-300 */
+}
+.focus-indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 9999px;
+  background: #38bdf8;
+  box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.6);
+  animation: focus-dot-pulse 1.8s ease-in-out infinite;
+}
+@keyframes focus-dot-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(56, 189, 248, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .focus-indicator-dot {
+    animation: none;
+  }
+}
+
 /* ---- markdown comment bodies ---- */
 .md-body {
   font-size: 13px;
@@ -127,7 +188,7 @@ body {
 
 /* nested member sub-lanes sit slightly indented + dimmer */
 .vis-labelset .vis-label.vis-nested-group {
-  padding-left: 1rem;
+  padding-left: 0.625rem;
   font-size: 11px;
   opacity: 0.85;
 }
@@ -137,18 +198,69 @@ body {
    Scoped to user rows so the repo row's chevron + title layout is untouched. */
 .vis-labelset .vis-label.tl-user-row .vis-inner {
   width: 100%;
+  /* Cap the contributor column so the timeline gets more room. vis sizes the left
+     panel to the widest label, so a hard ceiling here is what actually narrows it.
+     With the stats stacked below, the name owns its line and gets ~3x the room it
+     had before; only an unusually long display name truncates at this ceiling. */
+  max-width: 264px;
 }
 .tl-user {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: flex-start;
+  gap: 5px;
   min-width: 0;
   width: 100%;
 }
+/* Stacked main column beside the caret+avatar gutter: name line on top, the
+   interaction stats indented just below it (so the name owns its own line). */
+.tl-user-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+.tl-user-name-line {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+/* Per-row collapse caret: a small, quiet triangle that brightens on hover. Sits
+   flush-left before the avatar; the row shrinks to just this label when collapsed. */
+.tl-collapse-caret {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-right: -1px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.tl-collapse-caret:hover {
+  background: rgba(120, 120, 120, 0.18);
+  color: #374151;
+}
+.dark .tl-collapse-caret:hover {
+  color: #e5e7eb;
+}
+/* Req 3: per-row collapse is suspended while a focus overlay is active — hide the
+   caret so a kept row can't be collapsed (it must stay expanded). */
+.tl-focus-active .tl-collapse-caret {
+  display: none;
+}
 .tl-user-avatar {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 9999px;
   object-fit: cover;
   background: #e5e7eb;
@@ -167,7 +279,10 @@ body {
 .tl-user-name {
   font-size: 12.5px;
   font-weight: 600;
-  max-width: 150px;
+  /* The name owns its line now (stats moved below), so it uses the full width and
+     only truncates if it would exceed the capped column — rare for real names. */
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -188,12 +303,13 @@ body {
   align-items: center;
 }
 .tl-user-stats {
-  display: inline-flex;
+  /* On its own line under the name now — wrap (rather than widen the column) if a
+     prolific contributor's stats run long. */
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  padding-left: 8px;
-  font-size: 11.5px;
+  gap: 3px 8px;
+  font-size: 11px;
   color: #6b7280;
 }
 .dark .tl-user-stats {
@@ -276,14 +392,17 @@ body {
   color: #e5e7eb;
 }
 
-/* "Exit focus" button — bottom-left of the timeline, shown only while a
-   cross-user / activity focus has collapsed the rows. Reverts to all rows and
-   the prior window, and closes the modal. */
+/* "Exit focus" button — pinned to the bottom-left of the timeline's VISIBLE
+   viewport (absolute to the timeline wrapper, so it never scrolls with the rows
+   or the time axis), shown only while a cross-user / activity focus has
+   collapsed the rows. Reverts to all rows and the prior window, and closes the
+   modal. The z-index sits well above every vis layer (items top out at 5) so it
+   always floats over the timeline content. */
 .tl-exit-focus {
   position: absolute;
   bottom: 12px;
   left: 12px;
-  z-index: 20;
+  z-index: 1000;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -348,12 +467,44 @@ body {
   background-color: rgba(255, 255, 255, 0.05);
 }
 
+/* Inter-contributor divider: a crisp rail along the bottom of every contributor
+   row so adjacent users read as separate — the zebra band alone is too subtle
+   where one row's cross-person event band abuts the next user's PR bars. Drawn as
+   an inset box-shadow (NOT a border or margin) so it adds ZERO height: the label
+   panel, foreground rows, and the background grid lines stay pixel-aligned, since
+   vis lays those out from its own measured group heights and any real height we
+   added here would desync them. Spans both panels (label + foreground) for a
+   full-width line; repo header rows (no .tl-user-row) keep their own section break.
+   Sits under the row's markers/bars in paint order, so a glyph at the very bottom
+   edge briefly overlaps it without hiding the rail across the rest of the row. */
+.vis-labelset .vis-label.tl-user-row,
+.vis-foreground .vis-group.tl-user-row {
+  box-shadow: inset 0 -2px 0 0 rgba(15, 23, 42, 0.2);
+}
+.dark .vis-labelset .vis-label.tl-user-row,
+.dark .vis-foreground .vis-group.tl-user-row {
+  box-shadow: inset 0 -2px 0 0 rgba(255, 255, 255, 0.16);
+}
+
 /* PR range bars */
 .vis-item.pr-bar {
   border-radius: 6px;
   border-width: 1px;
   color: #fff;
   font-size: 11px;
+  cursor: pointer;
+  /* Sit above the own-work event markers (default vis z-index is 1) so an own
+     marker's connector stem, which overlaps up into the bar, is hidden behind the
+     bar's solid fill — making the marker read as joined to the bar even under its
+     rounded corners. Markers never overlap a bar except via that stem, so this has
+     no other visual effect. */
+  z-index: 2;
+  /* Absolute floor so a near-instant PR is never a 0-width, unclickable sliver. The
+     SPOTTABLE minimum is applied proportionally in JS (fitLaneBars grows each short
+     bar toward MIN_BAR_PX but clips it to its neighbour, preserving relative widths);
+     this stays small so a crowded bar can shrink below that preferred width instead
+     of bloating to a uniform size. Only bites in extreme density. */
+  min-width: 4px;
 }
 /* Open PRs read as "live": full saturation, taller. */
 .vis-item.pr-emph {
@@ -391,6 +542,22 @@ body {
   color: #e0f2fe;
   font-weight: 700;
 }
+/* "Has comments" mark — a small speech bubble, kept low-key (the thread-state
+   dots carry the detail). Sits among the status-line bits on open bars and
+   inline at the end of muted (closed/merged) bars. */
+.pr-comment-mark {
+  display: inline-flex;
+  align-items: center;
+  color: #e0f2fe;
+  opacity: 0.85;
+}
+.pr-comment-mark svg {
+  display: block;
+}
+.vis-item.pr-muted .pr-comment-mark {
+  margin-left: 2px;
+  opacity: 0.75;
+}
 .vis-item.pr-open {
   background-color: #1d4ed8;
   border-color: #3b82f6;
@@ -416,101 +583,49 @@ body {
 .vis-item.pr-stalled {
   box-shadow: 0 0 0 2px #ef4444;
 }
-@keyframes pr-flash {
-  0% {
-    box-shadow:
-      0 0 0 6px rgba(251, 191, 36, 0.95),
-      0 0 20px 5px rgba(251, 191, 36, 0.75);
-  }
-  100% {
-    box-shadow:
-      0 0 0 3px #fbbf24,
-      0 0 12px 2px rgba(251, 191, 36, 0.6);
-  }
-}
+/* The selected PR's bar: the same soft sky pulse used for cross-user focus and
+   selected markers (a glow rather than the old yellow border), so PR highlighting
+   reads consistently everywhere — bar click, j/k cycling, opening detail, the PR
+   panel's Show / Focus links. */
 .vis-item.vis-selected.pr-bar {
-  box-shadow:
-    0 0 0 3px #fbbf24,
-    0 0 12px 2px rgba(251, 191, 36, 0.6);
-  animation: pr-flash 0.6s ease-out;
-  /* keep a short selected PR spottable, same as the cross-link highlight */
-  min-width: 22px;
+  overflow: visible; /* let the glow escape the bar bounds */
   z-index: 5;
+  animation: ev-select-pulse 1.8s ease-in-out infinite;
+}
+/* PR-isolation focus: bars sharing the focused PR's packed lane are hidden so only
+   the focused PR's bar shows (see isolatePrBars in Timeline/index.tsx). */
+.vis-item.pr-bar.pr-focus-hidden {
+  display: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .vis-item.vis-selected.pr-bar {
     animation: none;
-  }
-}
-/* The PR band — and the marker or cluster — an open marker modal points at: a
-   bright marching-ants dashed ring plus a strong sky glow, so a cross-contributor
-   link is unmistakable at a glance. The ring lives on a ::after pseudo-element so
-   it reads even on faded (muted) bars, and covers clusters as well as lone
-   markers. */
-@keyframes cross-link-glow {
-  0%,
-  100% {
     box-shadow:
-      0 0 0 3px rgba(56, 189, 248, 1),
-      0 0 16px 5px rgba(56, 189, 248, 0.9);
-  }
-  50% {
-    box-shadow:
-      0 0 0 5px rgba(186, 230, 253, 1),
-      0 0 26px 9px rgba(56, 189, 248, 0.65);
+      0 0 0 3px rgba(56, 189, 248, 0.85),
+      0 0 12px 3px rgba(56, 189, 248, 0.5);
   }
 }
-@keyframes cross-link-march {
-  to {
-    /* one full 12px dash+gap cycle per loop → seamless; edges travel clockwise */
-    background-position: 12px 0, -12px 100%, 0 -12px, 100% 12px;
-  }
-}
+/* The PR band — and the marker or cluster — an open marker modal points at, or the
+   two-person rows held in cross-user focus: the SAME soft sky pulse used for a
+   same-person selected event (see ev-select-pulse below). This previously carried a
+   bright marching-ants dashed ring, which read as excessive in focus mode; now it
+   just breathes the gentle glow so cross-user and same-person cues match. */
 .vis-item.pr-bar.pr-cross-linked,
 .vis-item.ev-cross-linked .ev-marker-inner,
 .vis-item.ev-cross-linked .ev-cluster-inner {
-  animation: cross-link-glow 1.8s ease-in-out infinite;
+  animation: ev-select-pulse 1.8s ease-in-out infinite;
 }
 .vis-item.pr-bar.pr-cross-linked {
   overflow: visible; /* let the ring escape the bar bounds */
-  /* A short-lived PR is a sliver a couple of px wide — even glowing it's easy to
-     miss. Force a spottable minimum width while it's the highlighted bar. */
-  min-width: 22px;
   z-index: 5; /* ride above neighbours so the glow isn't clipped by them */
 }
 .vis-item.ev-cross-linked .ev-marker-inner,
 .vis-item.ev-cross-linked .ev-cluster-inner {
-  position: relative; /* anchor the ring on the centered marker/cluster */
+  position: relative; /* ride above neighbours so the glow isn't clipped */
+  z-index: 5;
 }
-.vis-item.pr-bar.pr-cross-linked::after,
-.vis-item.ev-cross-linked .ev-marker-inner::after,
-.vis-item.ev-cross-linked .ev-cluster-inner::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  pointer-events: none;
-  /* four edge strips (top/bottom/left/right) form the dashed border. Bright sky
-     dashes with a strong drop-shadow so the ants themselves glow. */
-  background-image:
-    repeating-linear-gradient(90deg, #bae6fd 0 6px, transparent 6px 12px),
-    repeating-linear-gradient(90deg, #bae6fd 0 6px, transparent 6px 12px),
-    repeating-linear-gradient(0deg, #bae6fd 0 6px, transparent 6px 12px),
-    repeating-linear-gradient(0deg, #bae6fd 0 6px, transparent 6px 12px);
-  background-size: 100% 3.5px, 100% 3.5px, 3.5px 100%, 3.5px 100%;
-  background-position: 0 0, 0 100%, 0 0, 100% 0;
-  background-repeat: no-repeat;
-  filter: drop-shadow(0 0 3px #38bdf8) drop-shadow(0 0 1px #38bdf8);
-  animation: cross-link-march 0.8s linear infinite;
-}
-.vis-item.pr-bar.pr-cross-linked::after {
-  border-radius: 6px; /* match the PR bar */
-}
-.vis-item.ev-cross-linked .ev-marker-inner::after {
-  border-radius: 9999px; /* a halo around the tiny marker */
-  inset: -4px;
-}
-.vis-item.ev-cross-linked .ev-cluster-inner::after {
-  border-radius: 11px; /* match the cluster pill + inset */
+.vis-item.ev-cross-linked .ev-marker-inner {
+  border-radius: 9999px; /* circular halo around the tiny marker */
 }
 @media (prefers-reduced-motion: reduce) {
   .vis-item.pr-bar.pr-cross-linked,
@@ -518,13 +633,8 @@ body {
   .vis-item.ev-cross-linked .ev-cluster-inner {
     animation: none;
     box-shadow:
-      0 0 0 3px #bae6fd,
-      0 0 14px 3px #38bdf8;
-  }
-  .vis-item.pr-bar.pr-cross-linked::after,
-  .vis-item.ev-cross-linked .ev-marker-inner::after,
-  .vis-item.ev-cross-linked .ev-cluster-inner::after {
-    animation: none;
+      0 0 0 3px rgba(56, 189, 248, 0.85),
+      0 0 12px 3px rgba(56, 189, 248, 0.5);
   }
 }
 
@@ -547,7 +657,6 @@ body {
 }
 .vis-item.pr-bar.pr-focus-glow {
   overflow: visible;
-  min-width: 22px; /* keep a sliver-width bar spottable while glowing */
   z-index: 5;
   animation: pr-focus-glow 2s ease-out forwards;
 }
@@ -561,25 +670,15 @@ body {
 }
 
 /* Focus-exit cue: leaving focus mode re-centres on the marker that opened it and
-   gives that marker a single soft sky glow that fades to nothing over 3s — just
-   enough to relocate it, deliberately WITHOUT the marching-ants ring. The class
-   is stripped by a timer once the fade completes (see flashExitGlow). */
-@keyframes ev-exit-glow {
-  0% {
-    box-shadow:
-      0 0 0 4px rgba(56, 189, 248, 0.9),
-      0 0 18px 6px rgba(56, 189, 248, 0.6);
-  }
-  100% {
-    box-shadow:
-      0 0 0 0 rgba(56, 189, 248, 0),
-      0 0 0 0 rgba(56, 189, 248, 0);
-  }
-}
+   keeps a soft sky pulse on it — the SAME persistent breathing glow as a selected
+   event (ev-select-pulse), rather than a flash that fades away, so it anchors the
+   user in a large repo until their next marker / focus interaction clears it
+   (applyContext → applyExitGlow(null)). */
 .vis-item.ev-exit-glow .ev-marker-inner,
 .vis-item.ev-exit-glow .ev-cluster-inner {
   position: relative;
-  animation: ev-exit-glow 3s ease-out forwards;
+  z-index: 5;
+  animation: ev-select-pulse 1.8s ease-in-out infinite;
 }
 .vis-item.ev-exit-glow .ev-marker-inner {
   border-radius: 9999px; /* circular halo around the tiny marker */
@@ -590,6 +689,43 @@ body {
     animation: none;
     box-shadow:
       0 0 0 3px rgba(56, 189, 248, 0.8),
+      0 0 12px 3px rgba(56, 189, 248, 0.5);
+  }
+}
+
+/* Selection pulse: the marker/cluster the open popover refers to breathes a soft
+   sky halo for as long as it's selected, so it's always locatable — the exit-cue
+   glow above, but looping instead of fading out. Used only outside cross-user
+   focus (the :not(.ev-cross-linked) guard hands the marker to the marching-ants
+   ring when a two-person focus owns it, so the two never stack). */
+@keyframes ev-select-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(56, 189, 248, 0.85),
+      0 0 14px 5px rgba(56, 189, 248, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 5px rgba(56, 189, 248, 0.4),
+      0 0 8px 2px rgba(56, 189, 248, 0.25);
+  }
+}
+.vis-item.ev-selected:not(.ev-cross-linked) .ev-marker-inner,
+.vis-item.ev-selected:not(.ev-cross-linked) .ev-cluster-inner {
+  position: relative;
+  z-index: 5;
+  animation: ev-select-pulse 1.8s ease-in-out infinite;
+}
+.vis-item.ev-selected:not(.ev-cross-linked) .ev-marker-inner {
+  border-radius: 9999px; /* circular halo around the tiny marker */
+}
+@media (prefers-reduced-motion: reduce) {
+  .vis-item.ev-selected:not(.ev-cross-linked) .ev-marker-inner,
+  .vis-item.ev-selected:not(.ev-cross-linked) .ev-cluster-inner {
+    animation: none;
+    box-shadow:
+      0 0 0 3px rgba(56, 189, 248, 0.85),
       0 0 12px 3px rgba(56, 189, 248, 0.5);
   }
 }
@@ -659,6 +795,13 @@ body {
   background: transparent;
   border: none;
   box-shadow: none;
+  /* vis sizes/anchors the point box at the timestamp and extends it to the RIGHT,
+     but the glyph is centred on the timestamp (translateX(-50%) below). That
+     transparent right overhang otherwise sits over the NEXT glyph and steals its
+     clicks — so only part of each glyph was clickable. Make the box click-through;
+     the visible inner (re-enabled below) is the hit target, and a click still
+     resolves to this item via vis's DOM walk-up from the event target. */
+  pointer-events: none;
 }
 .vis-item.ev-marker .vis-dot,
 .vis-item.ev-cluster .vis-dot {
@@ -675,6 +818,7 @@ body {
   justify-content: center;
   cursor: pointer;
   position: relative; /* anchor the own-work chevron + cross-link ring */
+  pointer-events: auto; /* the visible glyph is the hit target (box is none above) */
 }
 .ev-marker-inner svg {
   display: block;
@@ -696,6 +840,7 @@ body {
   cursor: pointer;
   border: 1px solid rgba(255, 255, 255, 0.25);
   position: relative; /* anchor the own-work chevron + cross-link ring */
+  pointer-events: auto; /* the visible pill is the hit target (box is none above) */
 }
 .vis-item.ev-cluster.vis-selected,
 .vis-item.ev-marker.vis-selected {
@@ -703,32 +848,82 @@ body {
   box-shadow: none;
 }
 
-/* Divider above the cross-user band: a full-width background item confined to
-   the `cross` subgroup. A subtle top line (+ faint tint) marks where a user's
-   own-work bands end and their actions on others' PRs begin. Decorative only —
-   never intercept clicks meant for the markers drawn over it. */
+/* Cross-person "zone": the shared band at the bottom of a row holding this user's
+   actions on OTHER people's PRs (a full-width background item confined to the
+   `cross` subgroup). Rendered as a faint indigo wash under a firmer top divider —
+   the SAME indigo that tints the cross markers' chips, so the zone and the markers
+   inside it read as one "outbound" system, instantly separating a user's own-PR
+   work above from their contributions to others below. Decorative only — never
+   intercept clicks meant for the markers drawn over it. */
 .vis-item.vis-background.cross-sep {
-  border-top: 1px solid rgba(148, 163, 184, 0.35);
-  background: rgba(148, 163, 184, 0.05);
+  border-top: 1px solid rgba(99, 102, 241, 0.38);
+  background: rgba(99, 102, 241, 0.06);
   pointer-events: none;
 }
+.dark .vis-item.vis-background.cross-sep {
+  border-top-color: rgba(129, 140, 248, 0.42);
+  background: rgba(129, 140, 248, 0.09);
+}
 
-/* Own-work chevron: an up-caret above the marker/cluster, pointing at the PR
-   bar it sits directly beneath (markers share their PR's subgroup band). Only
-   own-work events get it (.ev-own = actor is the PR author); cross-user markers,
-   whose PR bar lives in another row, deliberately omit it. */
-.vis-item.ev-own .ev-marker-inner::before,
-.vis-item.ev-own .ev-cluster-inner::before {
+/* Own-work cue: events on the actor's OWN PR (.ev-own) sit on the subgroup band
+   directly beneath their PR bar. A vertical stem (::after) runs from the glyph UP and
+   OVERLAPS into the bar's solid body, with NO arrowhead/tip. The glyph-box→bar gap is
+   ~4px, so a ~14px stem runs ~10px past the bar's bottom edge — clear of its 6px
+   corner radius. The bar is given a higher z-index (see .vis-item.pr-bar) so it paints
+   OVER the overlapping portion: the stem emerges from under the bar's solid fill and
+   reads as connected even under the bar's rounded corners. Cross-person markers, whose
+   PR bar lives in another row, get the outbound chip instead. */
+.vis-item.ev-own .ev-marker-inner::after,
+.vis-item.ev-own .ev-cluster-inner::after {
   content: '';
   position: absolute;
-  top: -5px;
+  bottom: 100%;
   left: 50%;
-  width: 5px;
-  height: 5px;
-  border-top: 2px solid #cbd5e1;
-  border-left: 2px solid #cbd5e1;
-  transform: translateX(-50%) rotate(45deg);
+  width: 0;
+  height: 14px;
+  border-left: 1.5px solid rgba(203, 213, 225, 0.85);
+  transform: translateX(-50%);
   pointer-events: none;
+}
+/* Circular glyphs (.ev-round) are inset ~3px from the marker box top, so anchor the
+   stem at the curve (bottom: calc(100% - 3px)) and add that 3px back to the height so
+   its overlap into the bar matches the square markers'. */
+.vis-item.ev-own .ev-marker-inner.ev-round::after {
+  bottom: calc(100% - 3px);
+  height: 17px;
+}
+
+/* Cross-person chip: a soft indigo disc + hairline ring hugging the glyph, marking
+   an action on someone else's PR. It's a per-marker cue (reads even when the row is
+   collapsed or zoomed in), in the same indigo as the cross zone. Built from the
+   inner's own background + box-shadow (not a pseudo-element), so it paints behind
+   the glyph with no stacking tricks — and the animated sky selection/focus pulse
+   (which drives box-shadow via keyframes) cleanly overrides it while selected.
+   Keep the box at the glyph's natural 16px (NO padding): vis top-aligns items in a
+   band, so a taller chip would push single markers below the cluster pills on the
+   shared `cross` line — both must stay 16px to sit on one centreline. */
+.vis-item.ev-cross .ev-marker-inner {
+  border-radius: 9999px;
+  background: rgba(99, 102, 241, 0.1);
+}
+/* The chip's ring is a box-shadow, which the sky selection/focus pulse also drives
+   (animated, and a static fallback under prefers-reduced-motion). Yield the ring
+   to those states so a selected/focused cross marker still reads as sky, not
+   indigo — the faint disc background stays, harmlessly, underneath. */
+.vis-item.ev-cross:not(.ev-selected):not(.ev-cross-linked):not(.ev-exit-glow) .ev-marker-inner {
+  box-shadow: inset 0 0 0 1px rgba(99, 102, 241, 0.42);
+}
+.vis-item.ev-cross:not(.ev-selected):not(.ev-cross-linked):not(.ev-exit-glow) .ev-cluster-inner {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+.dark .vis-item.ev-cross .ev-marker-inner {
+  background: rgba(129, 140, 248, 0.16);
+}
+.dark .vis-item.ev-cross:not(.ev-selected):not(.ev-cross-linked):not(.ev-exit-glow) .ev-marker-inner {
+  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.52);
+}
+.dark .vis-item.ev-cross:not(.ev-selected):not(.ev-cross-linked):not(.ev-exit-glow) .ev-cluster-inner {
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.32);
 }
 
 /* legacy default-dot styling (kept for any non-custom points) */
@@ -771,6 +966,20 @@ body {
   margin-left: -2px;
   border-radius: 1px;
   background: rgba(56, 189, 248, 0.05);
+}
+
+/* Transient flash when an Activity entry is deep-linked from the timeline (e.g.
+   the commit popover's "View in Activity") — a soft sky wash that fades out. */
+@keyframes activity-flash {
+  0% {
+    background: rgba(56, 189, 248, 0.28);
+  }
+  100% {
+    background: rgba(56, 189, 248, 0);
+  }
+}
+.activity-flash {
+  animation: activity-flash 1.8s ease-out forwards;
 }
 
 /* ---- "my turn" pulsing ring (cards + timeline bars) ---- */

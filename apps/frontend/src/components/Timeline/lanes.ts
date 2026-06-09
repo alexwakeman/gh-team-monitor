@@ -33,10 +33,25 @@ function prEndMs(pr: TimelinePr, nowMs: number): number {
  * same lane as filters toggle, and own-work event markers can resolve their PR's
  * lane regardless of whether that PR's bar is currently shown.
  *
+ * `tierOf` groups PRs by rendered bar HEIGHT: a lane only ever holds bars of one
+ * tier, so the lane's band height is uniform and every bar sits flush against the
+ * own-work marker band just below it. Without this, a short merged bar packed into
+ * a lane sized by a tall open bar floats at the band top, leaving its `ev:<lane>`
+ * markers stranded ~15px below (vis top-aligns items within a band). The cost is at
+ * most one extra lane per row for a user with both tall and short non-overlapping
+ * PRs. Defaults to a single tier (the original packing) when omitted.
+ *
+ * Lanes pack by REAL time spans (not inflated by the bars' pixel min-width), so a
+ * prolific contributor's row stays compact and the lane assignment is zoom-stable.
+ * Two near-instant PRs created in close succession therefore share a lane, and
+ * their min-width bars would pixel-overlap — that overlap is resolved horizontally
+ * at render time by `fitLaneBars` (Timeline/index.tsx), not by spending a row here.
+ *
  * @returns prId -> lane index (0 = topmost lane in the row)
  */
 export function assignPrLanes(
   prs: TimelinePr[],
+  tierOf: (pr: TimelinePr) => number | string = () => 0,
   nowMs = Date.now(),
 ): Map<number, number> {
   const byGroup = new Map<string, TimelinePr[]>();
@@ -51,15 +66,21 @@ export function assignPrLanes(
   for (const list of byGroup.values()) {
     const sorted = [...list].sort((a, b) => prStartMs(a) - prStartMs(b));
     const laneEnds: number[] = []; // laneEnds[i] = end-ms of the last PR in lane i
+    const laneTier: (number | string)[] = []; // laneTier[i] = the height tier lane i holds
     for (const pr of sorted) {
       const start = prStartMs(pr);
+      const tier = tierOf(pr);
       // First lane that has freed up (its last PR ended at or before this one
-      // starts). Touching spans (end === start) may share a lane — vis clips a
-      // bar's label to its own width, so adjacent bars never bleed together.
-      let lane = laneEnds.findIndex((endMs) => endMs <= start);
+      // starts) AND holds this PR's tier, so a lane never mixes bar heights.
+      // Touching spans (end === start) may share a lane — vis clips a bar's label
+      // to its own width, so adjacent bars never bleed together.
+      let lane = laneEnds.findIndex(
+        (endMs, i) => endMs <= start && laneTier[i] === tier,
+      );
       if (lane === -1) {
         lane = laneEnds.length;
         laneEnds.push(prEndMs(pr, nowMs));
+        laneTier.push(tier);
       } else {
         laneEnds[lane] = prEndMs(pr, nowMs);
       }
